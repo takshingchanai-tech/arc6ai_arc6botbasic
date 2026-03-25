@@ -8,7 +8,7 @@ const CORS = {
 }
 
 export default {
-  async fetch(request: Request, env: { OPENAI_API_KEY: string }): Promise<Response> {
+  async fetch(request: Request, env: { OPENAI_API_KEY: string; PROMPTS: KVNamespace }): Promise<Response> {
     const url = new URL(request.url)
 
     // ── CORS preflight ──────────────────────────────────────────────
@@ -37,7 +37,10 @@ export default {
       }
 
       try {
-        const { messages } = await request.json() as { messages: { role: string; content: string }[] }
+        const { messages, clientId } = await request.json() as { messages: { role: string; content: string }[]; clientId?: string }
+
+        // Look up per-client system prompt from KV, fall back to default
+        const systemPrompt = (clientId ? await env.PROMPTS.get(clientId) : null) ?? SYSTEM_PROMPT
 
         const openaiRes = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
@@ -47,7 +50,7 @@ export default {
           },
           body: JSON.stringify({
             model: 'gpt-4o-mini',
-            messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...messages],
+            messages: [{ role: 'system', content: systemPrompt }, ...messages],
             stream: true,
             max_tokens: 800,
             temperature: 0.65,

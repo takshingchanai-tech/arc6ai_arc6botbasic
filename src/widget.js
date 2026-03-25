@@ -3,6 +3,7 @@
 
   const cfg = window.Arc6BotConfig || {};
   const API_URL    = cfg.apiUrl      || 'https://bot.arc6ai.com/chat';
+  const CLIENT_ID  = cfg.clientId    || null;
   const ACCENT     = cfg.accentColor || '#6366F1';
   const GREETING   = cfg.greeting    || "Hi! I'm Arc6Bot — Arc6AI's AI assistant. Ask me anything about our products, RAG technology, or how we can help your business.";
   const PLACEHOLDER = cfg.placeholder || 'Ask about Arc6Bot, pricing, RAG…';
@@ -294,7 +295,7 @@
       const res = await fetch(API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: messages.slice(0, -1) }),
+        body: JSON.stringify({ messages: messages.slice(0, -1), ...(CLIENT_ID && { clientId: CLIENT_ID }) }),
         signal: abortCtrl.signal,
       });
 

@@ -3,6 +3,10 @@ main = "src/index.ts"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
+[[kv_namespaces]]
+binding = "PROMPTS"
+id = "7d9a3204cc3c4ceca755e54e88e7cc11"
+
 [build]
 command = ""
 
