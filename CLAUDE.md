@@ -10,7 +10,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Arc6Bot Basic** — a standalone Cloudflare Worker that provides:
 1. `GET /widget.js` — embeddable vanilla JS chat widget (clients paste 2 script tags to install)
 2. `POST /chat` — chat API with streaming OpenAI responses, per-client system prompts via KV
-3. `GET /whatsapp` + `POST /whatsapp` — (planned) WhatsApp Business API integration
+3. `GET /whatsapp` — Meta webhook verification
+4. `POST /whatsapp` — WhatsApp Business API: read inbound messages, reply via OpenAI, persist conversation history in KV
 
 This is a **product repo**, separate from the Arc6AI website. The website (`arc6ai_website`) is just one of many clients that install this widget.
 
@@ -20,6 +21,8 @@ This is a **product repo**, separate from the Arc6AI website. The website (`arc6
 npm run dev      # local dev server at http://localhost:8787
 npm run deploy   # deploy to Cloudflare Workers (arc6bot.takshingchanai.workers.dev)
 ```
+
+There is no test suite or linter configured. TypeScript is compiled directly by wrangler — no separate `tsc` step needed.
 
 ```bash
 # Manage per-client system prompts in KV
@@ -49,8 +52,8 @@ package.json
 - `OPTIONS *` — CORS preflight
 - `GET /widget.js` — serves `widget.js` with `Content-Type: application/javascript`
 - `POST /chat` — accepts `{ messages, clientId }`, streams OpenAI response
-- `GET /whatsapp` — Meta webhook verification (planned)
-- `POST /whatsapp` — receive WhatsApp messages, reply via WhatsApp API (planned)
+- `GET /whatsapp` — Meta webhook verification (`hub.mode`, `hub.verify_token`, `hub.challenge`)
+- `POST /whatsapp` — receive WhatsApp messages → look up history → call OpenAI (non-streaming) → send reply → persist history
 
 ### Per-Client System Prompts (Cloudflare KV)
 - KV namespace binding: `PROMPTS` (id: `7d9a3204cc3c4ceca755e54e88e7cc11`)
@@ -80,6 +83,10 @@ Clients paste this into their website:
 - Sends `{ messages, clientId }` to `apiUrl` on each message
 - Streams response via Fetch Streams API
 - UI: floating bottom-right button + slide-in panel from right
+- `widget.js` is imported into `index.ts` as a raw string via the wrangler `[[rules]]` `type = "Text"` config in `wrangler.toml` — `widget.d.ts` exists solely to satisfy TypeScript for this non-standard import
+
+### Streaming Pipeline
+The `/chat` endpoint converts OpenAI's SSE stream (lines like `data: {...}`) into a plain UTF-8 text stream of content chunks. The widget reads this directly with `getReader()` — there is no SSE parsing on the client side.
 
 ### CORS
 All responses include `Access-Control-Allow-Origin: *` so any client website can call the API.
@@ -88,10 +95,10 @@ All responses include `Access-Control-Allow-Origin: *` so any client website can
 
 | Name | Where | Description |
 |---|---|---|
-| `OPENAI_API_KEY` | Cloudflare Worker secret | Required for /chat endpoint |
-| `WHATSAPP_TOKEN` | Cloudflare Worker secret (planned) | Meta access token |
-| `WHATSAPP_VERIFY_TOKEN` | Cloudflare Worker secret (planned) | Webhook verification token |
-| `WHATSAPP_PHONE_NUMBER_ID` | wrangler.toml [vars] (planned) | Meta phone number ID |
+| `OPENAI_API_KEY` | Cloudflare Worker secret | Required for /chat and /whatsapp endpoints |
+| `WHATSAPP_TOKEN` | Cloudflare Worker secret | Meta Graph API access token |
+| `WHATSAPP_VERIFY_TOKEN` | Cloudflare Worker secret | Webhook verification token (you choose this value) |
+| `WHATSAPP_PHONE_NUMBER_ID` | wrangler.toml `[vars]` | Meta phone number ID (from Meta Developer Console) |
 
 Set secrets via: `npx wrangler secret put SECRET_NAME`
 
@@ -113,6 +120,24 @@ npm run deploy
 3. Give the client their install snippet with `clientId: 'abc-bakery'`
 4. No redeployment needed — KV updates take effect immediately
 
-## Planned Features
+## WhatsApp Setup (one-time)
 
-- **WhatsApp channel** — `GET/POST /whatsapp` routes using Meta WhatsApp Business API. Requires conversation history stored in KV (keyed by phone number) since WhatsApp has no browser session.
+1. Fill in `WHATSAPP_PHONE_NUMBER_ID` in `wrangler.toml [vars]`
+2. Deploy: `npm run deploy`
+3. Set secrets:
+   ```bash
+   npx wrangler secret put WHATSAPP_TOKEN
+   npx wrangler secret put WHATSAPP_VERIFY_TOKEN
+   ```
+4. In Meta Developer Console → WhatsApp → Configuration, set webhook URL to `https://arc6bot.takshingchanai.workers.dev/whatsapp` and verify token to match what you set for `WHATSAPP_VERIFY_TOKEN`
+5. Set a system prompt for this WhatsApp number in KV using the Meta phone number ID as the key:
+   ```bash
+   npx wrangler kv key put --namespace-id=7d9a3204cc3c4ceca755e54e88e7cc11 --remote "123456789012345" "You are the assistant for ABC Bakery on WhatsApp..."
+   ```
+
+### WhatsApp Architecture
+- **Per-client isolation**: system prompt is looked up by `metadata.phone_number_id` (the Meta phone number ID of the receiving business). Each client WhatsApp number gets its own prompt in KV.
+- **Conversation history** stored in KV under `wa:history:{phoneNumberId}:{userPhone}`, max 20 messages, 24h TTL — scoped per (business number × user) so clients never share context
+- `POST /whatsapp` acknowledges Meta with `200 OK` immediately; all AI+KV+send work runs in `ctx.waitUntil()` to avoid Meta retries
+- Non-streaming OpenAI call (WhatsApp needs a complete text payload, not a stream)
+- Only `type: "text"` messages are processed; delivery receipts and media are silently ignored

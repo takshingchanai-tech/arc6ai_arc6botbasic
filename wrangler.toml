@@ -7,6 +7,9 @@ compatibility_flags = ["nodejs_compat"]
 binding = "PROMPTS"
 id = "7d9a3204cc3c4ceca755e54e88e7cc11"
 
+[vars]
+WHATSAPP_PHONE_NUMBER_ID = ""
+
 [build]
 command = ""
 
